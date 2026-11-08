@@ -4,3 +4,4 @@ tests/.build/
 .firebase/
 .DS_Store
 *.log
+moallim-kit/
