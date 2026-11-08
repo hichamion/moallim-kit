@@ -382,7 +382,7 @@ html.dark .juz-tile .fill {
 
 /* Inside a class on a phone the header space goes to the class switcher */
 @media (max-width: 640px) {
-    body.in-class #brandText {
+    #brandText {
         display: none;
     }
 }
