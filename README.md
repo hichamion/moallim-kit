@@ -24,3 +24,9 @@ npm test
 - `firestore.rules`: كل محفّظ يقرأ ويكتب بياناته وحده. النشر: `firebase deploy --only firestore:rules`.
 - `apps-script/Code.gs`: طريقة المزامنة البديلة عبر Google Sheets.
 - يُنشر الموقع تلقائيًا عبر `.github/workflows/deploy.yml` عند كل دفع إلى `main`.
+
+## المصادر والرخص
+
+- **نص المصحف:** Tanzil Quran Text (Uthmani, Version 1.1) من مشروع تنزيل https://tanzil.net برخصة CC BY 3.0، محفوظ دون أي تعديل في `src/assets/quran-uthmani.txt` مع إشعار الحقوق الأصلي. البسملة تُعرض عنوانًا للسورة عند العرض فقط، والنص المخزَّن كما هو.
+- **خط المصحف:** Amiri Quran برخصة SIL Open Font License.
+- **الأيقونات:** Lucide برخصة ISC.

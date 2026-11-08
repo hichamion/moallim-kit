@@ -9,13 +9,7 @@
                     <div class="w-10 h-10 shrink-0 rounded-xl bg-gradient-to-br from-indigo-600 to-violet-600 flex items-center justify-center text-white shadow-md shadow-indigo-200 group-hover:scale-105 transition-transform">
                         <i class="fa-solid fa-graduation-cap text-lg"></i>
                     </div>
-                    <div id="brandText">
-                        <div class="flex items-center gap-2 whitespace-nowrap">
-                            <span class="font-extrabold text-lg text-slate-900 tracking-tight">مُعلّم كِت</span>
-                            <span class="text-[11px] bg-indigo-50 text-indigo-700 font-bold px-2 py-0.5 rounded-full border border-indigo-200">Pro</span>
-                        </div>
-                        <p class="text-xs text-slate-500 hidden sm:block">مدرستك بين يديك</p>
-                    </div>
+                    <div id="brandText"><span class="brand-name">مُعلّم كِت</span></div>
                 </button>
 
                 <!-- Breadcrumb when inside a class -->
@@ -75,6 +69,10 @@
                 <button onclick="app.switchTab('seating')" data-tab="seating" class="class-tab-btn flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all">
                     <i class="fa-solid fa-mosque"></i>
                     <span id="circleTabName" class="max-w-[160px] truncate">الحلقة</span>
+                </button>
+                <button onclick="app.startRecite()" data-tab="recite" class="class-tab-btn flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all">
+                    <i class="fa-solid fa-book-open"></i>
+                    <span>جلسة التسميع</span>
                 </button>
                 <button onclick="app.switchTab('sessions')" data-tab="sessions" class="class-tab-btn flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all">
                     <i class="fa-regular fa-calendar-check"></i>

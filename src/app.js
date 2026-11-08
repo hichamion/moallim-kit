@@ -411,7 +411,10 @@
                     errors: cleanInt(log.errors, 0),
                     tajweedNotes: cleanText(log.tajweedNotes, 1000),
                     rating: cleanText(log.rating, 60),
-                    lessonKey: LESSON_KEY.test(log.lessonKey || '') ? log.lessonKey : ''
+                    lessonKey: LESSON_KEY.test(log.lessonKey || '') ? log.lessonKey : '',
+                    reviewKind: ['near', 'far'].includes(log.reviewKind) ? log.reviewKind : '',
+                    source: log.source === 'mushaf' ? 'mushaf' : '',
+                    time: /^\d{2}:\d{2}$/.test(log.time || '') ? log.time : ''
                 }))
             };
         }
@@ -515,6 +518,16 @@
          * Validates data from storage, a file or the cloud, and brings old versions up to date.
          * Throws when the data cannot be trusted, so nothing is replaced by mistake.
          */
+        // Tanzil Quran Text (Uthmani, Version 1.1), tanzil.net, CC BY 3.0: gzip of the verbatim file, inserted at build time.
+        const QURAN_GZ_B64 = "__QURAN_GZ__";
+
+        function quranTypeLabel(log) {
+            if (log?.sessionType === 'new') return 'حفظ جديد';
+            if (log?.reviewKind === 'far') return 'مراجعة بعيدة';
+            if (log?.reviewKind === 'near') return 'مراجعة قريبة';
+            return 'مراجعة';
+        }
+
         const BEHAVIOR_ICONS = ['fa-hand-sparkles', 'fa-thumbs-up', 'fa-handshake-angle', 'fa-book-open-reader', 'fa-lightbulb', 'fa-star', 'fa-clock', 'fa-broom', 'fa-comment-slash', 'fa-book-skull', 'fa-file-circle-xmark', 'fa-triangle-exclamation', 'fa-mobile-screen', 'fa-face-frown'];
         const BEHAVIOR_ICON_NAMES = {
             'fa-hand-sparkles': '✋', 'fa-thumbs-up': '👍', 'fa-handshake-angle': '🤝', 'fa-book-open-reader': '📖', 'fa-lightbulb': '💡',
@@ -1016,6 +1029,10 @@
             activeTab: 'seating',
             rearrangeMode: false,
             selectedLesson: 1,
+            recite: null,
+            quranText: null,
+            quranLoading: null,
+            pendingReciteAction: null,
             account: null,
             accountRevision: null,
             accountStatus: 'idle',
@@ -1679,13 +1696,6 @@
                         <div class="office-window" aria-hidden="true">
                             <span class="sky-disc"></span><span class="sky-star s1"></span><span class="sky-star s2"></span><span class="sky-star s3"></span>
                         </div>
-                        <div class="notice-board">
-                            <div class="pin"></div>
-                            <strong>${greeting}</strong>
-                            <div class="note-date">${esc(gregorian)}</div>
-                            ${hijri ? `<div class="note-date">${esc(hijri)}</div>` : ''}
-                            ${notice}
-                        </div>
                         <div class="office-frames">
                             ${frames.map(f => `
                                 <button onclick="${f.action}" class="wall-frame" title="${f.label}" aria-label="${f.label}">
@@ -1757,7 +1767,7 @@
                                 </div>
                             </div>
                             ${this.plantSvg(idx)}
-                            <button onclick="app.confirmTrashClass('${cls.id}')" class="door-trash" title="نقل الحلقة إلى سلة المهملات" aria-label="حذف ${esc(cls.name)}"><i class="fa-solid fa-trash-can"></i></button>
+                            <button onclick="app.confirmTrashClass('${cls.id}')" class="door-trash" title="نقل الحلقة إلى سلة المهملات" aria-label="حذف ${esc(cls.name)}"><span class="mac-trash" aria-hidden="true"></span></button>
                             ${live ? '<span class="door-badge now">الآن</span>' : (today ? `<span class="door-badge" dir="ltr">${esc(today.start)}</span>` : '')}
                             ${this.editBuilding ? `
                                 <div class="door-tools">
@@ -1800,7 +1810,7 @@
                             <button onclick="app.toggleBuildingEdit()" class="roof-btn">${this.editBuilding ? 'تم' : 'تعديل'}</button>
                             <div class="roof-end">
                                 ${archivedCount ? `<button onclick="app.openArchiveModal()" class="roof-btn" title="أرشيف الحلقات"><i class="fa-solid fa-box-archive"></i> ${archivedCount}</button>` : ''}
-                                <button onclick="app.openTrashModal()" class="roof-btn" title="سلة المهملات" aria-label="سلة المهملات"><i class="fa-solid fa-trash-can"></i> ${trashCount || ''}</button>
+                                <button onclick="app.openTrashModal()" class="roof-btn" title="سلة المهملات" aria-label="سلة المهملات"><span class="mac-trash" aria-hidden="true"></span> ${trashCount || ''}</button>
                             </div>
                         </div>
                         ${this.officeHtml()}
@@ -3362,7 +3372,7 @@
                 const behaviorOf = stId => (cls.behaviorLogs || []).filter(l => l.studentId === stId && (l.lessonKey ? l.lessonKey === key : l.date === date));
                 const recorded = this.isRecorded(cls, key);
                 const title = `${weekdayName(date)} ${fmtDate(date)}${occ ? ` • ${occ.start} - ${occ.end}` : ''}${lesson > 1 ? ` • الحصة ${lesson}` : ''}`;
-                const entryText = e => (e ? `${esc(e.surahName)} (${e.fromAyah}-${e.toAyah})` : '<span class="text-slate-400">—</span>');
+                const entryText = e => (e ? `${esc(e.surahName)} (${e.fromAyah}-${e.toAyah})${e.reviewKind ? ` <span class="text-[10px] text-slate-500">${quranTypeLabel(e)}</span>` : ''}` : '<span class="text-slate-400">—</span>');
                 const ratingChip = e => (e ? `<span class="rate-chip">${esc(e.rating)}${e.errors ? ` • ${e.errors} أخطاء` : ''}</span>` : '');
 
                 const header = `
@@ -3625,7 +3635,8 @@
                 const listMode = this.circleView === 'list';
                 container.innerHTML = `
                     <div class="circle-actions no-print">
-                        <button onclick="app.openClassModal('${cls.id}')" class="tool-btn active"><i class="fa-solid fa-gear"></i><span>إعدادات الحلقة</span></button>
+                        <button onclick="app.startRecite()" class="tool-btn active recite-start"><i class="fa-solid fa-book-open"></i><span>بدء جلسة التسميع</span></button>
+                        <button onclick="app.openClassModal('${cls.id}')" class="tool-btn"><i class="fa-solid fa-gear"></i><span>إعدادات الحلقة</span></button>
                         <button onclick="app.openStudentModal()" class="tool-btn"><i class="fa-solid fa-user-plus"></i><span>إضافة طالب</span></button>
                         <button onclick="app.openBulkStudentsModal()" class="tool-btn"><i class="fa-solid fa-users"></i><span>إضافة عدة طلاب</span></button>
                         <button onclick="app.openImportModal()" class="tool-btn"><i class="fa-solid fa-file-excel"></i><span>استيراد من Excel</span></button>
@@ -3692,7 +3703,8 @@
                                 <p class="text-xs text-slate-500">${esc(cls.name)}${st.studentNumber ? ` • رقم ${esc(st.studentNumber)}` : ''}</p>
                             </div>
                             <div class="flex flex-wrap gap-2">
-                                <button onclick="app.openStudentModal('${st.id}')" class="tool-btn active"><i class="fa-solid fa-pen"></i><span>تعديل البيانات والصورة</span></button>
+                                <button onclick="app.startRecite('${st.id}')" class="tool-btn active recite-start"><i class="fa-solid fa-book-open"></i><span>بدء جلسة التسميع</span></button>
+                                <button onclick="app.openStudentModal('${st.id}')" class="tool-btn"><i class="fa-solid fa-pen"></i><span>تعديل البيانات والصورة</span></button>
                                 <button onclick="app.openTransferModal('${st.id}')" class="tool-btn"><i class="fa-solid fa-right-left"></i><span>نقل إلى حلقة أخرى</span></button>
                                 <button onclick="app.confirmDeleteStudent('${st.id}')" class="tool-btn danger"><i class="fa-solid fa-trash"></i><span>حذف أو أرشفة</span></button>
                             </div>
@@ -3805,7 +3817,7 @@
 
             openTrashModal() {
                 const trashed = this.data.classes.filter(c => c.deletedAt);
-                this.openModal('سلة المهملات', trashed.length ? `
+                this.openModal('🗑 سلة المهملات', trashed.length ? `
                     <div class="space-y-2">
                         ${trashed.map(c => `
                             <div class="flex items-center justify-between gap-2 bg-slate-50 border border-slate-200 rounded-xl p-2.5">
@@ -4368,6 +4380,446 @@
             },
 
             /* ==========================================
+               INTERACTIVE MUSHAF AND RECITATION SESSION
+               Text: Tanzil Quran Text (Uthmani, Version 1.1), tanzil.net, CC BY 3.0, used verbatim.
+               ========================================== */
+            async loadQuran() {
+                if (this.quranText) return this.quranText;
+                if (!this.quranLoading) {
+                    this.quranLoading = (async () => {
+                        if (typeof DecompressionStream === 'undefined') throw new Error('no-decompress');
+                        const bytes = Uint8Array.from(atob(QURAN_GZ_B64), ch => ch.charCodeAt(0));
+                        const text = await new Response(new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'))).text();
+                        const map = new Map();
+                        text.split('\n').forEach(line => {
+                            const match = line.match(/^(\d+)\|(\d+)\|(.*)$/);
+                            if (!match) return;
+                            const sura = Number(match[1]);
+                            if (!map.has(sura)) map.set(sura, []);
+                            map.get(sura)[Number(match[2]) - 1] = match[3];
+                        });
+                        this.quranText = map;
+                        return map;
+                    })();
+                }
+                return this.quranLoading;
+            },
+
+            /** Ayah 1 of most surahs opens with the basmala in the source text; it is shown as a heading. */
+            splitBasmala(sura, firstAyah) {
+                if (sura === 1 || sura === 9) return { basmala: '', text: firstAyah };
+                const words = firstAyah.split(' ');
+                return { basmala: words.slice(0, 4).join(' '), text: words.slice(4).join(' ') };
+            },
+
+            reciteDefaults(cls, studentId, type) {
+                const rec = this.ensureStudentQuranRecord(cls, studentId);
+                const plan = rec.nextPlan || {};
+                const name = type === 'new' ? plan.newSurah : plan.revSurah;
+                const surah = surahByName(name) || ALL_SURAHS[77];
+                const from = type === 'new' ? plan.newFrom : plan.revFrom;
+                return { surah: surah.num, hint: Math.min(Math.max(1, from || 1), surah.ayahs) };
+            },
+
+            startRecite(studentId = null, type = null) {
+                const cls = this.getActiveClass();
+                if (!cls) return;
+                const keep = this.recite || {};
+                this.recite = {
+                    studentId,
+                    type: type || keep.type || 'new',
+                    surah: 78,
+                    hint: 1,
+                    start: null,
+                    end: null,
+                    mode: 'start',
+                    rating: 'جيد جداً',
+                    errors: 0,
+                    note: '',
+                    viewLog: null,
+                    fontSize: keep.fontSize || Number(localStorage.getItem('moallemkit_mushaf_size')) || 30,
+                    color: keep.color || localStorage.getItem('moallemkit_mushaf_color') || '#e9b949'
+                };
+                if (studentId) Object.assign(this.recite, this.reciteDefaults(cls, studentId, this.recite.type));
+                this.activeTab = 'recite';
+                this.animateNext = true;
+                this.renderClassWorkspace();
+                window.scrollTo({ top: 0 });
+            },
+
+            /** Opens a saved recitation on the mushaf with its range highlighted, without changing it. */
+            viewRecitation(studentId, logId) {
+                const cls = this.getActiveClass();
+                const log = cls.quranRecords?.[studentId]?.logs.find(l => l.id === logId);
+                const surah = log && surahByName(log.surahName);
+                if (!surah) return;
+                this.startRecite(studentId, log.sessionType === 'new' ? 'new' : (log.reviewKind || 'near'));
+                Object.assign(this.recite, { surah: surah.num, start: log.fromAyah, end: log.toAyah, hint: log.fromAyah, viewLog: log });
+                this.renderClassWorkspace();
+            },
+
+            reciteHasSelection() {
+                return Boolean(this.recite && !this.recite.viewLog && (this.recite.start || this.recite.end));
+            },
+
+            /** Asks before throwing away an unsaved selection. */
+            guardRecite(action) {
+                if (!this.reciteHasSelection()) {
+                    action();
+                    return;
+                }
+                this.pendingReciteAction = action;
+                this.openModal('تحديد غير محفوظ', `
+                    <div class="space-y-4">
+                        <p class="text-sm text-slate-600">حددت آيات لم تُحفظ بعد. هل تريد تجاهل هذا التحديد؟</p>
+                        <div class="flex justify-end gap-2">
+                            <button onclick="app.closeModal()" class="px-4 py-2 rounded-xl bg-slate-100 text-slate-700 text-xs font-bold">رجوع</button>
+                            <button onclick="app.closeModal(); app.pendingReciteAction?.();" class="px-4 py-2 rounded-xl bg-rose-600 text-white text-xs font-bold">تجاهل التحديد</button>
+                        </div>
+                    </div>
+                `);
+            },
+
+            reciteChooseStudent(studentId) {
+                this.guardRecite(() => this.startRecite(studentId, this.recite?.type));
+            },
+
+            reciteStepStudent(step) {
+                const cls = this.getActiveClass();
+                const list = cls.students;
+                const i = list.findIndex(s => s.id === this.recite.studentId);
+                const next = list[(i + step + list.length) % list.length];
+                if (next) this.reciteChooseStudent(next.id);
+            },
+
+            reciteSetType(type) {
+                this.guardRecite(() => {
+                    const cls = this.getActiveClass();
+                    Object.assign(this.recite, { type, start: null, end: null, mode: 'start', viewLog: null }, this.reciteDefaults(cls, this.recite.studentId, type));
+                    this.renderClassWorkspace();
+                });
+            },
+
+            reciteSetSurah(num) {
+                const n = Math.min(114, Math.max(1, Number(num) || 1));
+                this.guardRecite(() => {
+                    Object.assign(this.recite, { surah: n, start: null, end: null, mode: 'start', hint: 1, viewLog: null });
+                    this.renderClassWorkspace();
+                    document.querySelector('.mushaf-page')?.scrollIntoView({ block: 'start' });
+                });
+            },
+
+            reciteTapAyah(n) {
+                const r = this.recite;
+                if (r.viewLog) return;
+                if (r.mode === 'start' || !r.start) {
+                    r.start = n;
+                    if (r.end && r.end < n) r.end = null;
+                    r.mode = 'end';
+                } else if (n < r.start) {
+                    r.end = r.start;
+                    r.start = n;
+                } else {
+                    r.end = n;
+                }
+                sfx.play('click');
+                this.refreshMushafSelection();
+            },
+
+            reciteNudge(which, delta) {
+                const r = this.recite;
+                const total = ALL_SURAHS[r.surah - 1].ayahs;
+                if (!r[which]) r[which] = which === 'end' ? (r.start || 1) : (r.end || 1);
+                r[which] = Math.min(total, Math.max(1, r[which] + delta));
+                if (r.start && r.end && r.start > r.end) {
+                    if (which === 'start') r.end = r.start;
+                    else r.start = r.end;
+                }
+                this.refreshMushafSelection();
+            },
+
+            reciteClear() {
+                Object.assign(this.recite, { start: null, end: null, mode: 'start' });
+                this.refreshMushafSelection();
+            },
+
+            setMushafSize(delta) {
+                this.recite.fontSize = Math.min(52, Math.max(20, this.recite.fontSize + delta));
+                localStorage.setItem('moallemkit_mushaf_size', String(this.recite.fontSize));
+                document.querySelector('.mushaf-page')?.style.setProperty('--mushaf-size', `${this.recite.fontSize}px`);
+            },
+
+            setMushafColor(color) {
+                this.recite.color = color;
+                localStorage.setItem('moallemkit_mushaf_color', color);
+                document.querySelector('.mushaf-page')?.style.setProperty('--sel', color);
+                document.querySelectorAll('.swatch').forEach(s => s.classList.toggle('active', s.dataset.color === color));
+            },
+
+            jumpToAyah(value) {
+                const n = Number(value);
+                const el = document.getElementById(`ayah_${n}`);
+                if (!el) return;
+                el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                el.classList.add('flash');
+                setTimeout(() => el.classList.remove('flash'), 1200);
+            },
+
+            /** Updates highlights and the summary without redrawing the page, so the reading position stays. */
+            refreshMushafSelection() {
+                const r = this.recite;
+                document.querySelectorAll('.ayah').forEach(el => {
+                    const n = Number(el.dataset.n);
+                    const inRange = r.start && n >= r.start && n <= (r.end || r.start);
+                    el.classList.toggle('in-range', Boolean(inRange));
+                    el.classList.toggle('is-start', n === r.start);
+                    el.classList.toggle('is-end', Boolean(r.end) && n === r.end);
+                });
+                const panel = document.getElementById('recitePanel');
+                if (panel) panel.innerHTML = this.recitePanelHtml();
+            },
+
+            reciteSummary() {
+                const r = this.recite;
+                const surah = ALL_SURAHS[r.surah - 1];
+                if (!r.start) return 'اضغط على الآية التي بدأ منها الطالب';
+                if (!r.end) return `سورة ${surah.name}: البداية من الآية ${r.start} • اضغط الآن على آخر آية وصل إليها`;
+                const count = r.end - r.start + 1;
+                return `سورة ${surah.name}، من الآية ${r.start} إلى الآية ${r.end} (${count} ${count > 10 || count < 3 ? 'آية' : 'آيات'})`;
+            },
+
+            recitePanelHtml() {
+                const r = this.recite;
+                if (r.viewLog) {
+                    const l = r.viewLog;
+                    return `
+                        <div class="recite-summary">${esc(this.reciteSummary())}</div>
+                        <p class="text-xs text-slate-600">تسميع محفوظ بتاريخ ${fmtDate(l.date)} • ${esc(quranTypeLabel(l))} • ${esc(l.rating)}${l.errors ? ` • ${l.errors} أخطاء` : ''}${l.tajweedNotes ? ` • ${esc(l.tajweedNotes)}` : ''}</p>
+                        <div class="flex justify-end"><button onclick="app.openStudentFile('${esc(r.studentId)}')" class="px-4 py-2 rounded-xl bg-indigo-600 text-white text-xs font-bold">العودة إلى ملف الطالب</button></div>
+                    `;
+                }
+                const ratings = ['ممتاز متقن', 'جيد جداً', 'جيد', 'يحتاج إعادة'];
+                const ready = Boolean(r.start && r.end);
+                return `
+                    <div class="recite-summary ${ready ? 'ready' : ''}">${esc(this.reciteSummary())}</div>
+                    <div class="sel-chips">
+                        <div class="sel-chip ${r.mode === 'start' ? 'active' : ''}">
+                            <button onclick="app.recite.mode = 'start'; app.refreshMushafSelection();" class="sel-label">البداية: ${r.start || '—'}</button>
+                            <button onclick="app.reciteNudge('start', -1)" aria-label="البداية آية قبل"><i class="fa-solid fa-chevron-right"></i></button>
+                            <button onclick="app.reciteNudge('start', 1)" aria-label="البداية آية بعد"><i class="fa-solid fa-chevron-left"></i></button>
+                        </div>
+                        <div class="sel-chip ${r.mode === 'end' ? 'active' : ''}">
+                            <button onclick="app.recite.mode = 'end'; app.refreshMushafSelection();" class="sel-label">النهاية: ${r.end || '—'}</button>
+                            <button onclick="app.reciteNudge('end', -1)" aria-label="النهاية آية قبل"><i class="fa-solid fa-chevron-right"></i></button>
+                            <button onclick="app.reciteNudge('end', 1)" aria-label="النهاية آية بعد"><i class="fa-solid fa-chevron-left"></i></button>
+                        </div>
+                        <button onclick="app.reciteClear()" class="sel-clear" aria-label="مسح التحديد" title="مسح التحديد"><i class="fa-solid fa-rotate-left"></i></button>
+                    </div>
+                    <div class="grade-row">
+                        <select aria-label="التقدير" onchange="app.recite.rating = this.value" class="rating-select">
+                            ${ratings.map(x => `<option value="${x}" ${r.rating === x ? 'selected' : ''}>${x}</option>`).join('')}
+                        </select>
+                        <div class="err-stepper" aria-label="عدد الأخطاء">
+                            <button onclick="app.recite.errors = Math.max(0, app.recite.errors - 1); app.refreshMushafSelection();" aria-label="خطأ أقل">−</button>
+                            <span>${r.errors} أخطاء</span>
+                            <button onclick="app.recite.errors += 1; app.refreshMushafSelection();" aria-label="خطأ إضافي">+</button>
+                        </div>
+                        <input id="reciteNote" type="text" value="${esc(r.note)}" oninput="app.recite.note = this.value" placeholder="ملاحظة (اختياري)" class="note-input">
+                    </div>
+                    <div class="recite-actions">
+                        <button onclick="app.saveRecitation(false)" ${ready ? '' : 'disabled'} class="primary"><i class="fa-solid fa-floppy-disk"></i> حفظ</button>
+                        <button onclick="app.saveRecitation(true)" ${ready ? '' : 'disabled'} class="secondary"><i class="fa-solid fa-check-double"></i> حفظ والتالي</button>
+                        <button onclick="app.cancelRecite()" class="ghost" aria-label="إلغاء الجلسة"><i class="fa-solid fa-xmark"></i> إلغاء</button>
+                    </div>
+                `;
+            },
+
+            renderReciteTab(cls, container) {
+                const r = this.recite;
+                if (!r || !r.studentId || !cls.students.some(s => s.id === r.studentId)) {
+                    this.renderRecitePicker(cls, container);
+                    return;
+                }
+                if (!this.quranText) {
+                    container.innerHTML = '<div class="mushaf-loading"><i class="fa-solid fa-book-open"></i> جاري فتح المصحف...</div>';
+                    this.loadQuran().then(() => this.renderClassWorkspace()).catch(() => {
+                        container.innerHTML = '<div class="mushaf-loading">تعذر فتح المصحف في هذا المتصفح. حدّث المتصفح أو افتح التطبيق من رابطه على الإنترنت.</div>';
+                    });
+                    return;
+                }
+                const st = cls.students.find(s => s.id === r.studentId);
+                const surah = ALL_SURAHS[r.surah - 1];
+                const ayahs = this.quranText.get(r.surah) || [];
+                const head = this.splitBasmala(r.surah, ayahs[0] || '');
+                const types = [['new', 'حفظ جديد'], ['near', 'مراجعة قريبة'], ['far', 'مراجعة بعيدة']];
+                const colors = ['#e9b949', '#7cc8ba', '#93c0d6', '#e19ca5', '#c3a1c4'];
+                const toArabic = n => String(n).replace(/\d/g, d => '٠١٢٣٤٥٦٧٨٩'[d]);
+                const cls2 = n => [
+                    r.start && n >= r.start && n <= (r.end || r.start) ? 'in-range' : '',
+                    n === r.start ? 'is-start' : '',
+                    r.end && n === r.end ? 'is-end' : ''
+                ].join(' ');
+
+                container.innerHTML = `
+                    <div class="recite animate-pop">
+                        <div class="recite-head card">
+                            <div class="student-switch">
+                                <button onclick="app.reciteStepStudent(-1)" class="icon-btn" aria-label="الطالب السابق"><i class="fa-solid fa-chevron-right"></i></button>
+                                <div class="rec-photo">${this.photoHtml(st)}</div>
+                                <select aria-label="الطالب" onchange="app.reciteChooseStudent(this.value)" class="student-select">
+                                    ${cls.students.map(s => `<option value="${s.id}" ${s.id === st.id ? 'selected' : ''}>${esc(s.name)}</option>`).join('')}
+                                </select>
+                                <button onclick="app.reciteStepStudent(1)" class="icon-btn" aria-label="الطالب التالي"><i class="fa-solid fa-chevron-left"></i></button>
+                            </div>
+                            <div class="seg" role="group" aria-label="نوع التسميع">
+                                ${types.map(([k, l]) => `<button onclick="app.reciteSetType('${k}')" aria-pressed="${r.type === k}" class="${r.type === k ? 'active' : ''}">${l}</button>`).join('')}
+                            </div>
+                        </div>
+
+                        <div class="recite-tools card">
+                            <div class="flex items-center gap-1">
+                                <button onclick="app.reciteSetSurah(${r.surah - 1})" class="icon-btn" ${r.surah === 1 ? 'disabled' : ''} aria-label="السورة السابقة"><i class="fa-solid fa-chevron-right"></i></button>
+                                <select aria-label="السورة" onchange="app.reciteSetSurah(this.value)" class="surah-select">
+                                    ${ALL_SURAHS.map(s => `<option value="${s.num}" ${s.num === r.surah ? 'selected' : ''}>${s.num}. ${esc(s.name)}</option>`).join('')}
+                                </select>
+                                <button onclick="app.reciteSetSurah(${r.surah + 1})" class="icon-btn" ${r.surah === 114 ? 'disabled' : ''} aria-label="السورة التالية"><i class="fa-solid fa-chevron-left"></i></button>
+                            </div>
+                            <label class="jump">الآية <input type="number" min="1" max="${surah.ayahs}" inputmode="numeric" aria-label="انتقل إلى الآية" onchange="app.jumpToAyah(this.value)"></label>
+                            <div class="flex items-center gap-1">
+                                <button onclick="app.setMushafSize(-2)" class="icon-btn" aria-label="تصغير الخط">ـأ</button>
+                                <button onclick="app.setMushafSize(2)" class="icon-btn big" aria-label="تكبير الخط">أ+</button>
+                            </div>
+                            <div class="flex items-center gap-1" role="group" aria-label="لون التحديد">
+                                ${colors.map(c => `<button onclick="app.setMushafColor('${c}')" data-color="${c}" class="swatch ${r.color === c ? 'active' : ''}" style="background:${c}" aria-label="لون التحديد"></button>`).join('')}
+                            </div>
+                        </div>
+
+                        <article class="mushaf-page" style="--mushaf-size: ${r.fontSize}px; --sel: ${r.color}">
+                            <header class="surah-banner">
+                                <span class="meta">${surah.ayahs} آية</span>
+                                <h2>سورة ${esc(surah.name)}</h2>
+                                <span class="meta">الجزء ${surah.juzFrom}</span>
+                            </header>
+                            ${head.basmala ? `<p class="basmala">${esc(head.basmala)}</p>` : ''}
+                            <p class="ayat" dir="rtl">
+                                ${ayahs.map((text, i) => {
+                                    const n = i + 1;
+                                    const body = i === 0 ? head.text : text;
+                                    return `<span id="ayah_${n}" class="ayah ${cls2(n)} ${n === r.hint && !r.start ? 'hint' : ''}" data-n="${n}" role="button" tabindex="0" onclick="app.reciteTapAyah(${n})" aria-label="الآية ${n}">${esc(body)}<span class="ayah-no">۝${toArabic(n)}</span></span> `;
+                                }).join('')}
+                            </p>
+                            <footer class="mushaf-source">نص المصحف: الرسم العثماني برواية حفص عن عاصم، من مشروع تنزيل (tanzil.net)، الإصدار 1.1، برخصة CC BY 3.0، دون تعديل.</footer>
+                        </article>
+
+                        <div id="recitePanel" class="recite-panel card">${this.recitePanelHtml()}</div>
+                    </div>
+                `;
+                const target = r.viewLog ? r.start : (r.start || r.hint);
+                if (target > 1) requestAnimationFrame(() => document.getElementById(`ayah_${target}`)?.scrollIntoView({ block: 'center' }));
+            },
+
+            renderRecitePicker(cls, container) {
+                const type = this.recite?.type || 'new';
+                const types = [['new', 'حفظ جديد'], ['near', 'مراجعة قريبة'], ['far', 'مراجعة بعيدة']];
+                container.innerHTML = `
+                    <div class="animate-pop space-y-3">
+                        <div class="card p-4">
+                            <h2 class="text-lg font-extrabold text-slate-900">جلسة التسميع</h2>
+                            <p class="text-xs text-slate-500 mb-3">اختر نوع التسميع، ثم الطالب الذي تستمع إليه</p>
+                            <div class="seg" role="group" aria-label="نوع التسميع">
+                                ${types.map(([k, l]) => `<button onclick="app.recite = { ...(app.recite || {}), type: '${k}' }; app.renderClassWorkspace();" aria-pressed="${type === k}" class="${type === k ? 'active' : ''}">${l}</button>`).join('')}
+                            </div>
+                        </div>
+                        ${cls.students.length ? `
+                            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 stagger">
+                                ${cls.students.map(st => {
+                                    const rec = this.ensureStudentQuranRecord(cls, st.id);
+                                    const last = rec.logs[0];
+                                    const plan = rec.nextPlan;
+                                    const planText = type === 'new' ? `${plan.newSurah} ${plan.newFrom}-${plan.newTo}` : `${plan.revSurah} ${plan.revFrom}-${plan.revTo}`;
+                                    return `
+                                        <button onclick="app.startRecite('${st.id}', '${type}')" class="pick-card card text-right">
+                                            <div class="rec-photo">${this.photoHtml(st)}</div>
+                                            <div class="min-w-0 flex-1">
+                                                <div class="font-extrabold text-slate-900 truncate">${esc(st.name)}</div>
+                                                <div class="text-[11px] text-slate-500 truncate">المقترح: ${esc(planText)}</div>
+                                                ${last ? `<div class="text-[11px] text-slate-500 truncate">آخر تسميع: ${esc(quranTypeLabel(last))} • ${esc(last.surahName)} ${last.fromAyah}-${last.toAyah} • ${fmtDate(last.date)}</div>` : ''}
+                                            </div>
+                                            <span class="pick-go"><i class="fa-solid fa-book-open"></i> بدء</span>
+                                        </button>
+                                    `;
+                                }).join('')}
+                            </div>
+                        ` : '<p class="text-center text-sm text-slate-500 py-8">أضف طلابًا إلى الحلقة أولًا</p>'}
+                    </div>
+                `;
+            },
+
+            cancelRecite() {
+                this.guardRecite(() => {
+                    this.recite = { ...this.recite, studentId: null, start: null, end: null, viewLog: null };
+                    this.renderClassWorkspace();
+                    this.showToast('أُلغيت الجلسة دون تسجيل', 'info');
+                });
+            },
+
+            /** Saves the recitation into the student's record after the teacher confirms. */
+            saveRecitation(goNext) {
+                const cls = this.getActiveClass();
+                const r = this.recite;
+                if (!r?.start || !r?.end || r.viewLog) return;
+                const surah = ALL_SURAHS[r.surah - 1];
+                const st = cls.students.find(s => s.id === r.studentId);
+                const rec = this.ensureStudentQuranRecord(cls, st.id);
+                const today = getTodayStr(0);
+                const occurrence = this.occurrences(cls, today, today).find(o => !o.cancelled);
+                const lessonKey = occurrence ? occurrence.key : today;
+                const now = new Date();
+                const entry = {
+                    id: `qlog_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+                    date: today,
+                    lessonKey,
+                    sessionType: r.type === 'new' ? 'new' : 'revision',
+                    reviewKind: r.type === 'new' ? '' : r.type,
+                    surahName: surah.name,
+                    fromAyah: r.start,
+                    toAyah: r.end,
+                    errors: r.errors,
+                    tajweedNotes: (r.note || '').trim().slice(0, 1000),
+                    rating: r.rating,
+                    source: 'mushaf',
+                    time: `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`
+                };
+                // A second tap on save must not create the same record twice.
+                const same = rec.logs.find(l => l.date === today && l.sessionType === entry.sessionType && (l.reviewKind || '') === entry.reviewKind
+                    && l.surahName === entry.surahName && l.fromAyah === entry.fromAyah && l.toAyah === entry.toAyah);
+                if (same) Object.assign(same, { ...entry, id: same.id });
+                else rec.logs.unshift(entry);
+                this.applyQuranProgress(rec, surah, entry);
+
+                // Reciting means the student is present; an existing attendance mark is never changed.
+                cls.attendance = cls.attendance || {};
+                const day = cls.attendance[lessonKey] || (cls.attendance[lessonKey] = {});
+                if (!day[st.id]) day[st.id] = this.attendanceTypes().find(t => t.countsAs === 'present')?.id || 'present';
+
+                this.saveData();
+                sfx.play('positive');
+                this.showToast(`حُفظ: ${st.name} • ${quranTypeLabel(entry)} • سورة ${surah.name} ${entry.fromAyah}-${entry.toAyah}`);
+
+                if (goNext) {
+                    const i = cls.students.findIndex(s => s.id === st.id);
+                    const next = cls.students[i + 1];
+                    if (next) {
+                        this.startRecite(next.id, r.type);
+                        return;
+                    }
+                    this.showToast('انتهى طلاب الحلقة', 'info');
+                }
+                Object.assign(r, { start: null, end: null, mode: 'start', rating: 'جيد جداً', errors: 0, note: '' }, this.reciteDefaults(cls, st.id, r.type));
+                this.renderClassWorkspace();
+            },
+
+            /* ==========================================
                DAY AND NIGHT
                ========================================== */
             isNightNow() {
@@ -4721,6 +5173,7 @@
                 this.animateNext = false;
                 if (this.activeTab === 'sessions') this.renderSessionsTab(cls, container);
                 else if (this.activeTab === 'session') this.renderSessionPage(cls, container);
+                else if (this.activeTab === 'recite') this.renderReciteTab(cls, container);
                 else if (this.activeTab === 'attendance') this.renderAttendanceTab(cls, container);
                 else if (this.activeTab === 'behavior') this.renderBehaviorTab(cls, container);
                 else if (this.activeTab === 'quran') this.renderQuranTab(cls, container);
@@ -5348,10 +5801,11 @@
                                         <div class="flex items-start justify-between gap-3 p-3 rounded-xl bg-slate-50 border border-slate-100">
                                             <div class="min-w-0">
                                                 <div class="text-sm font-extrabold text-slate-800">
-                                                    <span class="${log.sessionType === 'new' ? 'text-emerald-700' : 'text-indigo-700'}">${log.sessionType === 'new' ? 'حفظ' : 'مراجعة'}:</span>
+                                                    <span class="${log.sessionType === 'new' ? 'text-emerald-700' : 'text-indigo-700'}">${quranTypeLabel(log)}:</span>
                                                     ${esc(log.surahName)} (${log.fromAyah}-${log.toAyah})
                                                 </div>
-                                                <div class="text-[11px] text-slate-500 mt-0.5">${fmtDate(log.date)} • ${esc(log.rating)} • ${log.errors} أخطاء</div>
+                                                <div class="text-[11px] text-slate-500 mt-0.5">${fmtDate(log.date)}${log.time ? ` • ${log.time}` : ''} • ${esc(log.rating)} • ${log.errors} أخطاء${log.source === 'mushaf' ? ' • من المصحف' : ''}</div>
+                                                ${surahByName(log.surahName) ? `<button onclick="app.viewRecitation('${st.id}', '${log.id}')" class="mt-1 text-[11px] font-bold text-indigo-700 underline">عرض في المصحف</button>` : ''}
                                                 ${log.tajweedNotes ? `<div class="text-xs text-slate-600 mt-1">${esc(log.tajweedNotes)}</div>` : ''}
                                             </div>
                                             <button onclick="app.deleteQuranLog('${st.id}', '${log.id}')" title="حذف الجلسة" class="text-slate-400 hover:text-rose-600 p-1 shrink-0"><i class="fa-solid fa-trash-can text-xs"></i></button>
@@ -6041,7 +6495,7 @@
                         </div>
 
                         <div class="flex flex-wrap justify-between gap-2 pt-3 border-t border-slate-100">
-                            ${existing ? `<button type="button" onclick="app.confirmTrashClass('${existing.id}')" class="px-4 py-2 rounded-xl bg-white border border-rose-300 text-rose-700 text-xs font-bold"><i class="fa-solid fa-trash-can ml-1"></i>نقل الحلقة إلى سلة المهملات</button>` : '<span></span>'}
+                            ${existing ? `<button type="button" onclick="app.confirmTrashClass('${existing.id}')" class="px-4 py-2 rounded-xl bg-white border border-rose-300 text-rose-700 text-xs font-bold"><span class="mac-trash ml-1" aria-hidden="true"></span>نقل الحلقة إلى سلة المهملات</button>` : '<span></span>'}
                             <div class="flex gap-2">
                             <button type="button" onclick="app.closeModal()" class="px-4 py-2 rounded-xl bg-slate-100 text-slate-700 text-xs font-bold">إلغاء</button>
                             <button type="submit" class="px-5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold">حفظ الحلقة</button>
@@ -6403,7 +6857,7 @@
                                     ['fa-box-archive', `أرشيف الحلقات (${this.data.classes.filter(c => c.archived && !c.deletedAt).length})`, 'app.openArchiveModal()'],
                                     ['fa-trash-can', `سلة المهملات (${this.data.classes.filter(c => c.deletedAt).length})`, 'app.openTrashModal()']
                                 ].map(([icon, label, action]) => `
-                                    <button onclick="${action}" class="p-2.5 rounded-xl bg-white border border-slate-200 text-xs font-bold text-slate-700 flex items-center gap-2"><i class="fa-solid ${icon} text-indigo-600"></i><span>${label}</span></button>
+                                    <button onclick="${action}" class="p-2.5 rounded-xl bg-white border border-slate-200 text-xs font-bold text-slate-700 flex items-center gap-2">${icon === 'fa-trash-can' ? '<span class="mac-trash" aria-hidden="true"></span>' : `<i class="fa-solid ${icon} text-indigo-600"></i>`}<span>${label}</span></button>
                                 `).join('')}
                             </div>
                         </div>
