@@ -282,7 +282,7 @@
          */
         const APPS_SCRIPT_CODE = "__GAS_CODE__";
         const IS_TEST_BUILD = "__TEST_BUILD__";
-        const SCHEMA_VERSION = 6;
+        const SCHEMA_VERSION = 7;
         const CLOUD_PROTOCOL = 2;
         const CLOUD_DEBOUNCE_MS = 4000;
         const MAX_SNAPSHOTS = 7;
@@ -384,6 +384,17 @@
             };
         }
 
+        /** Corrected or still-wrong words, keyed "surah:ayah:word". Only a known shape is kept. */
+        function cleanWordMarks(raw) {
+            const out = {};
+            Object.entries(raw || {}).forEach(([key, mark]) => {
+                if (!/^\d{1,3}:\d{1,3}:\d{1,3}$/.test(key) || !mark) return;
+                if (!['error', 'fixed'].includes(mark.s)) return;
+                out[key] = { s: mark.s, d: ISO_DATE.test(mark.d || '') ? mark.d : '', k: LESSON_KEY.test(mark.k || '') ? mark.k : '' };
+            });
+            return out;
+        }
+
         function cleanQuranRecord(raw) {
             const allNames = ALL_SURAHS.map(s => s.name);
             const plan = raw?.nextPlan || {};
@@ -393,6 +404,7 @@
             });
             return {
                 surahStatus,
+                wordMarks: cleanWordMarks(raw?.wordMarks),
                 nextPlan: {
                     newSurah: allNames.includes(plan.newSurah) ? plan.newSurah : 'النبأ',
                     newFrom: cleanInt(plan.newFrom, 1, 1),
@@ -1408,7 +1420,7 @@
             showDashboard() {
                 this.activeClassId = null;
                 this.activeQuranStudentId = null;
-                document.body.classList.remove('in-class');
+                document.body.classList.remove('in-class', 'reciting');
                 document.getElementById('scheduleView').classList.add('hidden');
                 this.setNavActive('home');
                 document.getElementById('dashboardView').classList.remove('hidden');
@@ -1535,7 +1547,7 @@
             showSchedule() {
                 this.activeClassId = null;
                 this.activeQuranStudentId = null;
-                document.body.classList.remove('in-class');
+                document.body.classList.remove('in-class', 'reciting');
                 document.getElementById('dashboardView').classList.add('hidden');
                 document.getElementById('classWorkspaceView').classList.add('hidden');
                 document.getElementById('classNavBar').classList.add('hidden');
@@ -2763,7 +2775,7 @@
                                                     <td class="sticky right-0 z-10 bg-white py-2 px-3 border-l border-slate-200 font-bold text-slate-800 max-w-[150px] truncate">${esc(st.name)}</td>
                                                     ${ordered.map((a, colIndex) => `
                                                         <td class="p-1.5 text-center border-l border-slate-100">
-                                                            <input type="number" inputmode="decimal" min="0" step="any" max="${a.maxScore}" value="${marks[a.id] ?? ''}"
+                                                            <input type="number" inputmode="decimal" min="0" step="any" max="${esc(a.maxScore)}" value="${esc(marks[a.id] ?? '')}"
                                                                 data-row="${row}" data-col="${colIndex}" aria-label="${esc(st.name)}: ${esc(a.title)}"
                                                                 onchange="app.updateStudentScore('${st.id}', '${a.id}', this, ${a.maxScore})" onkeydown="app.gradeKey(event)"
                                                                 class="w-16 text-center font-bold py-1.5 rounded-lg border border-slate-200 bg-slate-50 focus:bg-white">
@@ -4405,11 +4417,15 @@
                 return this.quranLoading;
             },
 
+            /** Words of an ayah, in the same order everywhere, so a word's index always means the same word. */
+            wordsOf(text) {
+                return String(text || '').trim().split(/\s+/).filter(Boolean);
+            },
+
             /** Ayah 1 of most surahs opens with the basmala in the source text; it is shown as a heading. */
             splitBasmala(sura, firstAyah) {
-                if (sura === 1 || sura === 9) return { basmala: '', text: firstAyah };
-                const words = firstAyah.split(' ');
-                return { basmala: words.slice(0, 4).join(' '), text: words.slice(4).join(' ') };
+                if (sura === 1 || sura === 9) return { basmala: '', skip: 0 };
+                return { basmala: this.wordsOf(firstAyah).slice(0, 4).join(' '), skip: 4 };
             },
 
             reciteDefaults(cls, studentId, type) {
@@ -4421,10 +4437,19 @@
                 return { surah: surah.num, hint: Math.min(Math.max(1, from || 1), surah.ayahs) };
             },
 
+            /** The record a recitation saved today belongs to: today's session, or the day itself. */
+            lessonKeyNow(cls) {
+                const today = getTodayStr(0);
+                const occurrence = this.occurrences(cls, today, today).find(o => !o.cancelled);
+                return occurrence ? occurrence.key : today;
+            },
+
             startRecite(studentId = null, type = null) {
                 const cls = this.getActiveClass();
                 if (!cls) return;
                 const keep = this.recite || {};
+                const rec = studentId ? this.ensureStudentQuranRecord(cls, studentId) : null;
+                const marks = rec ? JSON.parse(JSON.stringify(rec.wordMarks || {})) : {};
                 this.recite = {
                     studentId,
                     type: type || keep.type || 'new',
@@ -4433,10 +4458,13 @@
                     start: null,
                     end: null,
                     mode: 'start',
+                    mark: 'range',
                     rating: 'جيد جداً',
-                    errors: 0,
                     note: '',
                     viewLog: null,
+                    marks,
+                    savedMarks: JSON.stringify(marks),
+                    lessonKey: this.lessonKeyNow(cls),
                     fontSize: keep.fontSize || Number(localStorage.getItem('moallemkit_mushaf_size')) || 30,
                     color: keep.color || localStorage.getItem('moallemkit_mushaf_color') || '#e9b949'
                 };
@@ -4458,11 +4486,16 @@
                 this.renderClassWorkspace();
             },
 
-            reciteHasSelection() {
-                return Boolean(this.recite && !this.recite.viewLog && (this.recite.start || this.recite.end));
+            /** Corrections made on the mushaf and not saved yet. */
+            reciteDirty() {
+                return Boolean(this.recite && !this.recite.viewLog && JSON.stringify(this.recite.marks) !== this.recite.savedMarks);
             },
 
-            /** Asks before throwing away an unsaved selection. */
+            reciteHasSelection() {
+                return Boolean(this.recite && !this.recite.viewLog && (this.recite.start || this.recite.end)) || this.reciteDirty();
+            },
+
+            /** Asks before throwing away an unsaved selection or unsaved corrections. */
             guardRecite(action) {
                 if (!this.reciteHasSelection()) {
                     action();
@@ -4471,10 +4504,10 @@
                 this.pendingReciteAction = action;
                 this.openModal('تحديد غير محفوظ', `
                     <div class="space-y-4">
-                        <p class="text-sm text-slate-600">حددت آيات لم تُحفظ بعد. هل تريد تجاهل هذا التحديد؟</p>
+                        <p class="text-sm text-slate-600">لديك تحديد أو تصحيحات لم تُحفظ بعد. هل تريد تجاهلها؟</p>
                         <div class="flex justify-end gap-2">
                             <button onclick="app.closeModal()" class="px-4 py-2 rounded-xl bg-slate-100 text-slate-700 text-xs font-bold">رجوع</button>
-                            <button onclick="app.closeModal(); app.pendingReciteAction?.();" class="px-4 py-2 rounded-xl bg-rose-600 text-white text-xs font-bold">تجاهل التحديد</button>
+                            <button onclick="app.closeModal(); app.pendingReciteAction?.();" class="px-4 py-2 rounded-xl bg-rose-600 text-white text-xs font-bold">تجاهل</button>
                         </div>
                     </div>
                 `);
@@ -4509,6 +4542,18 @@
                 });
             },
 
+            /** A tap on an ayah: picks the start or the end of the range, or marks a word in «errors» mode. */
+            reciteAyahClick(n, event) {
+                const r = this.recite;
+                if (!r || r.viewLog) return;
+                if (r.mark === 'errors') {
+                    const word = event?.target?.closest?.('.w');
+                    if (word) this.reciteWordTap(n, Number(word.dataset.w));
+                    return;
+                }
+                this.reciteTapAyah(n);
+            },
+
             reciteTapAyah(n) {
                 const r = this.recite;
                 if (r.viewLog) return;
@@ -4523,7 +4568,41 @@
                     r.end = n;
                 }
                 sfx.play('click');
-                this.refreshMushafSelection();
+                this.refreshMushaf();
+            },
+
+            /**
+             * A wrong word goes red when tapped. Tapped again later (when the teacher hears it correct)
+             * it returns to the normal colour. Nothing is saved until the teacher confirms the session.
+             */
+            reciteWordTap(n, i) {
+                const r = this.recite;
+                if (!r || r.viewLog) return;
+                const key = `${r.surah}:${n}:${i}`;
+                const current = r.marks[key];
+                const today = getTodayStr(0);
+                r.marks[key] = !current || current.s === 'fixed'
+                    ? { s: 'error', d: today, k: r.lessonKey }
+                    : { s: 'fixed', d: today, k: r.lessonKey };
+                sfx.play('click');
+                this.refreshMushaf();
+            },
+
+            /** Words still marked wrong in this surah, inside the given range when one is given. */
+            reciteMarkCount(from = null, to = null) {
+                const r = this.recite;
+                let count = 0;
+                Object.entries(r.marks).forEach(([key, m]) => {
+                    const [s, a] = key.split(':').map(Number);
+                    if (s !== r.surah || m.s !== 'error') return;
+                    if (from === null || (a >= from && a <= to)) count++;
+                });
+                return count;
+            },
+
+            reciteFixedCount() {
+                const r = this.recite;
+                return Object.entries(r.marks).filter(([key, m]) => Number(key.split(':')[0]) === r.surah && m.s === 'fixed').length;
             },
 
             reciteNudge(which, delta) {
@@ -4535,12 +4614,12 @@
                     if (which === 'start') r.end = r.start;
                     else r.start = r.end;
                 }
-                this.refreshMushafSelection();
+                this.refreshMushaf();
             },
 
             reciteClear() {
                 Object.assign(this.recite, { start: null, end: null, mode: 'start' });
-                this.refreshMushafSelection();
+                this.refreshMushaf();
             },
 
             setMushafSize(delta) {
@@ -4565,23 +4644,51 @@
                 setTimeout(() => el.classList.remove('flash'), 1200);
             },
 
-            /** Updates highlights and the summary without redrawing the page, so the reading position stays. */
-            refreshMushafSelection() {
+            /** Redraws the verses and the panel in place, so the reading position stays where it is. */
+            refreshMushaf() {
                 const r = this.recite;
-                document.querySelectorAll('.ayah').forEach(el => {
-                    const n = Number(el.dataset.n);
-                    const inRange = r.start && n >= r.start && n <= (r.end || r.start);
-                    el.classList.toggle('in-range', Boolean(inRange));
-                    el.classList.toggle('is-start', n === r.start);
-                    el.classList.toggle('is-end', Boolean(r.end) && n === r.end);
-                });
+                if (!r || !this.quranText) return;
+                const ayat = document.querySelector('.ayat');
+                if (ayat) ayat.innerHTML = this.mushafAyatHtml();
                 const panel = document.getElementById('recitePanel');
                 if (panel) panel.innerHTML = this.recitePanelHtml();
+            },
+
+            refreshMushafSelection() {
+                this.refreshMushaf();
+            },
+
+            ayahClasses(n) {
+                const r = this.recite;
+                const inRange = r.start && n >= r.start && n <= (r.end || r.start);
+                return [
+                    inRange ? 'in-range' : '',
+                    n === r.start ? 'is-start' : '',
+                    r.end && n === r.end ? 'is-end' : '',
+                    n === r.hint && !r.start ? 'hint' : ''
+                ].join(' ');
+            },
+
+            mushafAyatHtml() {
+                const r = this.recite;
+                const ayahs = this.quranText.get(r.surah) || [];
+                const toArabic = n => String(n).replace(/\d/g, d => '٠١٢٣٤٥٦٧٨٩'[d]);
+                return ayahs.map((text, i) => {
+                    const n = i + 1;
+                    const skip = n === 1 ? this.splitBasmala(r.surah, text).skip : 0;
+                    const words = this.wordsOf(text).slice(skip).map((word, j) => {
+                        const index = j + skip;
+                        const mark = r.marks[`${r.surah}:${n}:${index}`];
+                        return `<span class="w${mark?.s === 'error' ? ' err' : ''}" data-w="${index}">${esc(word)}</span>`;
+                    }).join(' ');
+                    return `<span id="ayah_${n}" class="ayah ${this.ayahClasses(n)}" data-n="${n}" role="button" tabindex="0" onclick="app.reciteAyahClick(${n}, event)" aria-label="الآية ${n}">${words}<span class="ayah-no">۝${toArabic(n)}</span></span> `;
+                }).join('');
             },
 
             reciteSummary() {
                 const r = this.recite;
                 const surah = ALL_SURAHS[r.surah - 1];
+                if (r.mark === 'errors') return `سورة ${surah.name}: اضغط الكلمة الخاطئة لتحمر، واضغطها مرة أخرى إذا صُحّحت`;
                 if (!r.start) return 'اضغط على الآية التي بدأ منها الطالب';
                 if (!r.end) return `سورة ${surah.name}: البداية من الآية ${r.start} • اضغط الآن على آخر آية وصل إليها`;
                 const count = r.end - r.start + 1;
@@ -4600,34 +4707,44 @@
                 }
                 const ratings = ['ممتاز متقن', 'جيد جداً', 'جيد', 'يحتاج إعادة'];
                 const ready = Boolean(r.start && r.end);
-                return `
-                    <div class="recite-summary ${ready ? 'ready' : ''}">${esc(this.reciteSummary())}</div>
-                    <div class="sel-chips">
+                const dirty = this.reciteDirty();
+                const errors = ready ? this.reciteMarkCount(r.start, r.end) : this.reciteMarkCount();
+                const fixed = this.reciteFixedCount();
+                const modes = `
+                    <div class="seg mode-seg" role="group" aria-label="وضع الضغط على المصحف">
+                        <button onclick="app.recite.mark = 'range'; app.refreshMushaf();" aria-pressed="${r.mark === 'range'}" class="${r.mark === 'range' ? 'active' : ''}"><i class="fa-solid fa-book-open"></i> تحديد الآيات</button>
+                        <button onclick="app.recite.mark = 'errors'; app.refreshMushaf();" aria-pressed="${r.mark === 'errors'}" class="${r.mark === 'errors' ? 'active err' : ''}"><i class="fa-solid fa-circle-exclamation"></i> تسجيل الأخطاء</button>
+                    </div>`;
+                const body = r.mark === 'range'
+                    ? `<div class="sel-chips">
                         <div class="sel-chip ${r.mode === 'start' ? 'active' : ''}">
-                            <button onclick="app.recite.mode = 'start'; app.refreshMushafSelection();" class="sel-label">البداية: ${r.start || '—'}</button>
+                            <button onclick="app.recite.mode = 'start'; app.refreshMushaf();" class="sel-label">البداية: ${r.start || '—'}</button>
                             <button onclick="app.reciteNudge('start', -1)" aria-label="البداية آية قبل"><i class="fa-solid fa-chevron-right"></i></button>
                             <button onclick="app.reciteNudge('start', 1)" aria-label="البداية آية بعد"><i class="fa-solid fa-chevron-left"></i></button>
                         </div>
                         <div class="sel-chip ${r.mode === 'end' ? 'active' : ''}">
-                            <button onclick="app.recite.mode = 'end'; app.refreshMushafSelection();" class="sel-label">النهاية: ${r.end || '—'}</button>
+                            <button onclick="app.recite.mode = 'end'; app.refreshMushaf();" class="sel-label">النهاية: ${r.end || '—'}</button>
                             <button onclick="app.reciteNudge('end', -1)" aria-label="النهاية آية قبل"><i class="fa-solid fa-chevron-right"></i></button>
                             <button onclick="app.reciteNudge('end', 1)" aria-label="النهاية آية بعد"><i class="fa-solid fa-chevron-left"></i></button>
                         </div>
                         <button onclick="app.reciteClear()" class="sel-clear" aria-label="مسح التحديد" title="مسح التحديد"><i class="fa-solid fa-rotate-left"></i></button>
-                    </div>
+                    </div>`
+                    : `<div class="err-line">
+                        <span class="err-count">أخطاء${ready ? ' في النطاق' : ''}: ${errors}</span>
+                        <span class="fix-count">صُحّحت: ${fixed}</span>
+                    </div>`;
+                return `
+                    ${modes}
+                    <div class="recite-summary ${ready ? 'ready' : ''}">${esc(this.reciteSummary())}</div>
+                    ${body}
                     <div class="grade-row">
                         <select aria-label="التقدير" onchange="app.recite.rating = this.value" class="rating-select">
                             ${ratings.map(x => `<option value="${x}" ${r.rating === x ? 'selected' : ''}>${x}</option>`).join('')}
                         </select>
-                        <div class="err-stepper" aria-label="عدد الأخطاء">
-                            <button onclick="app.recite.errors = Math.max(0, app.recite.errors - 1); app.refreshMushafSelection();" aria-label="خطأ أقل">−</button>
-                            <span>${r.errors} أخطاء</span>
-                            <button onclick="app.recite.errors += 1; app.refreshMushafSelection();" aria-label="خطأ إضافي">+</button>
-                        </div>
                         <input id="reciteNote" type="text" value="${esc(r.note)}" oninput="app.recite.note = this.value" placeholder="ملاحظة (اختياري)" class="note-input">
                     </div>
                     <div class="recite-actions">
-                        <button onclick="app.saveRecitation(false)" ${ready ? '' : 'disabled'} class="primary"><i class="fa-solid fa-floppy-disk"></i> حفظ</button>
+                        <button onclick="app.saveRecitation(false)" ${ready || dirty ? '' : 'disabled'} class="primary"><i class="fa-solid fa-floppy-disk"></i> ${ready ? 'حفظ' : 'حفظ التصحيحات'}</button>
                         <button onclick="app.saveRecitation(true)" ${ready ? '' : 'disabled'} class="secondary"><i class="fa-solid fa-check-double"></i> حفظ والتالي</button>
                         <button onclick="app.cancelRecite()" class="ghost" aria-label="إلغاء الجلسة"><i class="fa-solid fa-xmark"></i> إلغاء</button>
                     </div>
@@ -4653,12 +4770,6 @@
                 const head = this.splitBasmala(r.surah, ayahs[0] || '');
                 const types = [['new', 'حفظ جديد'], ['near', 'مراجعة قريبة'], ['far', 'مراجعة بعيدة']];
                 const colors = ['#e9b949', '#7cc8ba', '#93c0d6', '#e19ca5', '#c3a1c4'];
-                const toArabic = n => String(n).replace(/\d/g, d => '٠١٢٣٤٥٦٧٨٩'[d]);
-                const cls2 = n => [
-                    r.start && n >= r.start && n <= (r.end || r.start) ? 'in-range' : '',
-                    n === r.start ? 'is-start' : '',
-                    r.end && n === r.end ? 'is-end' : ''
-                ].join(' ');
 
                 container.innerHTML = `
                     <div class="recite animate-pop">
@@ -4689,31 +4800,26 @@
                                 <button onclick="app.setMushafSize(-2)" class="icon-btn" aria-label="تصغير الخط">ـأ</button>
                                 <button onclick="app.setMushafSize(2)" class="icon-btn big" aria-label="تكبير الخط">أ+</button>
                             </div>
-                            <div class="flex items-center gap-1" role="group" aria-label="لون التحديد">
+                            <div class="swatches flex items-center gap-1" role="group" aria-label="لون التحديد">
                                 ${colors.map(c => `<button onclick="app.setMushafColor('${c}')" data-color="${c}" class="swatch ${r.color === c ? 'active' : ''}" style="background:${c}" aria-label="لون التحديد"></button>`).join('')}
                             </div>
                         </div>
 
-                        <article class="mushaf-page" style="--mushaf-size: ${r.fontSize}px; --sel: ${r.color}">
+                        <article class="mushaf-page ${r.mark === 'errors' ? 'errors-mode' : ''}" style="--mushaf-size: ${r.fontSize}px; --sel: ${r.color}">
                             <header class="surah-banner">
                                 <span class="meta">${surah.ayahs} آية</span>
                                 <h2>سورة ${esc(surah.name)}</h2>
                                 <span class="meta">الجزء ${surah.juzFrom}</span>
                             </header>
                             ${head.basmala ? `<p class="basmala">${esc(head.basmala)}</p>` : ''}
-                            <p class="ayat" dir="rtl">
-                                ${ayahs.map((text, i) => {
-                                    const n = i + 1;
-                                    const body = i === 0 ? head.text : text;
-                                    return `<span id="ayah_${n}" class="ayah ${cls2(n)} ${n === r.hint && !r.start ? 'hint' : ''}" data-n="${n}" role="button" tabindex="0" onclick="app.reciteTapAyah(${n})" aria-label="الآية ${n}">${esc(body)}<span class="ayah-no">۝${toArabic(n)}</span></span> `;
-                                }).join('')}
-                            </p>
+                            <p class="ayat" dir="rtl">${this.mushafAyatHtml()}</p>
                             <footer class="mushaf-source">نص المصحف: الرسم العثماني برواية حفص عن عاصم، من مشروع تنزيل (tanzil.net)، الإصدار 1.1، برخصة CC BY 3.0، دون تعديل.</footer>
                         </article>
 
                         <div id="recitePanel" class="recite-panel card">${this.recitePanelHtml()}</div>
                     </div>
                 `;
+                document.body.classList.toggle('reciting', !r.viewLog);
                 const target = r.viewLog ? r.start : (r.start || r.hint);
                 if (target > 1) requestAnimationFrame(() => document.getElementById(`ayah_${target}`)?.scrollIntoView({ block: 'center' }));
             },
@@ -4757,54 +4863,67 @@
 
             cancelRecite() {
                 this.guardRecite(() => {
-                    this.recite = { ...this.recite, studentId: null, start: null, end: null, viewLog: null };
+                    this.recite = { ...this.recite, studentId: null, start: null, end: null, viewLog: null, marks: {}, savedMarks: '{}' };
                     this.renderClassWorkspace();
                     this.showToast('أُلغيت الجلسة دون تسجيل', 'info');
                 });
             },
 
-            /** Saves the recitation into the student's record after the teacher confirms. */
+            /** Saves the recitation and the corrections after the teacher confirms. Nothing is saved on tap. */
             saveRecitation(goNext) {
                 const cls = this.getActiveClass();
                 const r = this.recite;
-                if (!r?.start || !r?.end || r.viewLog) return;
-                const surah = ALL_SURAHS[r.surah - 1];
+                if (!cls || !r || r.viewLog || !r.studentId) return;
+                const ready = Boolean(r.start && r.end);
+                if (!ready && !this.reciteDirty()) return;
                 const st = cls.students.find(s => s.id === r.studentId);
+                if (!st) return;
                 const rec = this.ensureStudentQuranRecord(cls, st.id);
-                const today = getTodayStr(0);
-                const occurrence = this.occurrences(cls, today, today).find(o => !o.cancelled);
-                const lessonKey = occurrence ? occurrence.key : today;
-                const now = new Date();
-                const entry = {
-                    id: `qlog_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
-                    date: today,
-                    lessonKey,
-                    sessionType: r.type === 'new' ? 'new' : 'revision',
-                    reviewKind: r.type === 'new' ? '' : r.type,
-                    surahName: surah.name,
-                    fromAyah: r.start,
-                    toAyah: r.end,
-                    errors: r.errors,
-                    tajweedNotes: (r.note || '').trim().slice(0, 1000),
-                    rating: r.rating,
-                    source: 'mushaf',
-                    time: `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`
-                };
-                // A second tap on save must not create the same record twice.
-                const same = rec.logs.find(l => l.date === today && l.sessionType === entry.sessionType && (l.reviewKind || '') === entry.reviewKind
-                    && l.surahName === entry.surahName && l.fromAyah === entry.fromAyah && l.toAyah === entry.toAyah);
-                if (same) Object.assign(same, { ...entry, id: same.id });
-                else rec.logs.unshift(entry);
-                this.applyQuranProgress(rec, surah, entry);
+                rec.wordMarks = cleanWordMarks(r.marks);
 
-                // Reciting means the student is present; an existing attendance mark is never changed.
-                cls.attendance = cls.attendance || {};
-                const day = cls.attendance[lessonKey] || (cls.attendance[lessonKey] = {});
-                if (!day[st.id]) day[st.id] = this.attendanceTypes().find(t => t.countsAs === 'present')?.id || 'present';
+                if (ready) {
+                    const surah = ALL_SURAHS[r.surah - 1];
+                    const today = getTodayStr(0);
+                    const lessonKey = r.lessonKey || this.lessonKeyNow(cls);
+                    const now = new Date();
+                    const entry = {
+                        id: `qlog_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+                        date: today,
+                        lessonKey,
+                        sessionType: r.type === 'new' ? 'new' : 'revision',
+                        reviewKind: r.type === 'new' ? '' : r.type,
+                        surahName: surah.name,
+                        fromAyah: r.start,
+                        toAyah: r.end,
+                        errors: this.reciteMarkCount(r.start, r.end),
+                        tajweedNotes: (r.note || '').trim().slice(0, 1000),
+                        rating: r.rating,
+                        source: 'mushaf',
+                        time: `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`
+                    };
+                    // A second tap on save must not create the same record twice.
+                    const same = rec.logs.find(l => l.date === today && l.sessionType === entry.sessionType && (l.reviewKind || '') === entry.reviewKind
+                        && l.surahName === entry.surahName && l.fromAyah === entry.fromAyah && l.toAyah === entry.toAyah);
+                    if (same) Object.assign(same, { ...entry, id: same.id });
+                    else rec.logs.unshift(entry);
+                    this.applyQuranProgress(rec, surah, entry);
 
+                    // Reciting means the student is present; an existing attendance mark is never changed.
+                    cls.attendance = cls.attendance || {};
+                    const day = cls.attendance[lessonKey] || (cls.attendance[lessonKey] = {});
+                    if (!day[st.id]) day[st.id] = this.attendanceTypes().find(t => t.countsAs === 'present')?.id || 'present';
+                }
+
+                r.savedMarks = JSON.stringify(r.marks);
                 this.saveData();
                 sfx.play('positive');
-                this.showToast(`حُفظ: ${st.name} • ${quranTypeLabel(entry)} • سورة ${surah.name} ${entry.fromAyah}-${entry.toAyah}`);
+
+                if (!ready) {
+                    this.showToast('حُفظت تصحيحات الكلمات');
+                    this.renderClassWorkspace();
+                    return;
+                }
+                this.showToast(`حُفظ: ${st.name} • ${quranTypeLabel({ sessionType: r.type === 'new' ? 'new' : 'revision', reviewKind: r.type === 'new' ? '' : r.type })} • سورة ${ALL_SURAHS[r.surah - 1].name} ${r.start}-${r.end}`);
 
                 if (goNext) {
                     const i = cls.students.findIndex(s => s.id === st.id);
@@ -4815,7 +4934,7 @@
                     }
                     this.showToast('انتهى طلاب الحلقة', 'info');
                 }
-                Object.assign(r, { start: null, end: null, mode: 'start', rating: 'جيد جداً', errors: 0, note: '' }, this.reciteDefaults(cls, st.id, r.type));
+                Object.assign(r, { start: null, end: null, mode: 'start', rating: 'جيد جداً', note: '' }, this.reciteDefaults(cls, st.id, r.type));
                 this.renderClassWorkspace();
             },
 

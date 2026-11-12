@@ -187,7 +187,7 @@ function page({ test, css, account }) {
 </script>
 <style>${css}</style>
 </head>
-${read('src/body.html')}
+${read('src/body.html').replace('__LOGO__', () => logo)}
 <script>
 ${account}
 </script>
@@ -256,6 +256,7 @@ const QURAN_GZ = quranGz();
 const css = (buildCairo() + buildAmiriQuran() + buildFontAwesome() + buildTailwind() + buildIcons())
   .replace(/__BG_APP__/g, () => image('src/assets/bg-app.jpg'))
   .replace(/__BG_CIRCLE__/g, () => image('src/assets/bg-circle.jpg'));
+const logo = `data:image/jpeg;base64,${read('src/assets/logo-96.jpg', null).toString('base64')}`;
 const account = buildAccount();
 const html = page({ test: false, css, account });
 writeFileSync(join(root, 'dist/moallim-kit.html'), html);

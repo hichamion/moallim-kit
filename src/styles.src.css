@@ -2223,3 +2223,218 @@ html.dark .ayah-no { color: #e0bf72; }
         min-height: 44px !important;
     }
 }
+
+/* Header logo: the teacher's own mark */
+.brand-logo {
+    width: 40px;
+    height: 40px;
+    border-radius: 12px;
+    object-fit: cover;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
+}
+
+/* ========== Word corrections on the mushaf ========== */
+.mushaf-page .w {
+    border-radius: 6px;
+    padding: 0 2px;
+    transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+.mushaf-page.errors-mode .w { cursor: pointer; }
+
+.mushaf-page .w.err {
+    color: #b42318;
+    background: rgba(180, 35, 24, 0.14);
+    box-shadow: inset 0 -2px 0 rgba(180, 35, 24, 0.55);
+}
+
+html.dark .mushaf-page .w.err {
+    color: #ffb4a9;
+    background: rgba(255, 180, 169, 0.16);
+    box-shadow: inset 0 -2px 0 rgba(255, 180, 169, 0.6);
+}
+
+.mode-seg { margin-bottom: 2px; }
+
+.mode-seg button.err.active {
+    background: #b42318;
+}
+
+.err-line {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+    font-size: 13px;
+    font-weight: 800;
+}
+
+.err-count { color: #b42318; }
+.fix-count { color: rgb(var(--text-emerald-700)); }
+html.dark .err-count { color: #ffb4a9; }
+
+/* ========== Phone: the mushaf fills the screen, controls stay small ========== */
+@media (max-width: 767px) {
+    /* Navigation bars that would hide the verses are off while reciting */
+    body.reciting #classNavBar,
+    body.reciting #bottomNav,
+    body.reciting #classHeaderCard,
+    body.reciting #headerBreadcrumb {
+        display: none !important;
+    }
+
+    body.reciting {
+        padding-bottom: 0 !important;
+    }
+
+    body.reciting main {
+        padding-top: 8px;
+        padding-bottom: 0;
+    }
+
+    .recite {
+        gap: 6px;
+    }
+
+    .recite-head {
+        padding: 6px;
+        gap: 6px;
+    }
+
+    .recite-head .rec-photo,
+    .recite-head .icon-btn {
+        display: none;
+    }
+
+    .student-select {
+        max-width: 100%;
+        width: 100%;
+        font-size: 13px;
+        padding: 6px 8px;
+    }
+
+    .student-switch { width: 100%; }
+
+    .seg button {
+        font-size: 11px;
+        padding: 6px 4px;
+    }
+
+    .recite-tools {
+        padding: 5px 6px;
+        gap: 4px;
+    }
+
+    .recite-tools .jump,
+    .recite-tools .swatches {
+        display: none;
+    }
+
+    .recite-tools .icon-btn {
+        width: 32px;
+        height: 32px;
+        min-width: 32px !important;
+        min-height: 32px !important;
+    }
+
+    .surah-select {
+        max-width: 170px;
+        font-size: 12px;
+        padding: 5px 8px;
+    }
+
+    .mushaf-page {
+        padding: 8px 6px 6px;
+        border-radius: 14px;
+    }
+
+    .surah-banner {
+        margin: 0 0 4px;
+        padding: 3px 10px;
+    }
+
+    .surah-banner h2 { font-size: 17px; }
+    .surah-banner .meta { font-size: 10px; }
+
+    .basmala {
+        font-size: calc(var(--mushaf-size) * 0.72);
+        line-height: 1.8;
+        margin-bottom: 2px;
+    }
+
+    .ayat {
+        font-size: calc(var(--mushaf-size) * 0.8);
+        line-height: 2;
+    }
+
+    /* The panel sticks to the bottom and is as short as it can be */
+    .recite-panel {
+        position: sticky;
+        bottom: 0;
+        border-radius: 16px 16px 0 0;
+        padding: 6px 8px calc(6px + env(safe-area-inset-bottom));
+        gap: 4px;
+        box-shadow: 0 -4px 16px rgba(30, 40, 38, 0.14);
+    }
+
+    .mode-seg button {
+        padding: 5px 4px;
+        font-size: 11px;
+    }
+
+    .recite-summary {
+        font-size: 11px;
+        line-height: 1.4;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    .sel-chips { gap: 4px; }
+
+    .sel-chip button {
+        min-height: 28px !important;
+        min-width: 28px !important;
+        font-size: 11px;
+        padding: 0 6px;
+    }
+
+    .sel-chip .sel-label { min-width: 70px !important; }
+
+    .sel-clear { padding: 3px 6px; }
+
+    .err-line { font-size: 11px; gap: 8px; }
+
+    .rating-select,
+    .note-input {
+        min-height: 32px !important;
+        font-size: 12px;
+        padding: 4px 8px;
+    }
+
+    .recite-actions { gap: 4px; }
+
+    .recite-actions button {
+        min-height: 34px !important;
+        padding: 6px 4px;
+        font-size: 11px;
+    }
+}
+
+/* Tighter phone sizes, measured on a 375 x 812 screen */
+@media (max-width: 767px) {
+    .recite-head { padding: 4px; }
+    .student-select { padding: 4px 8px; }
+    .seg button { min-height: 30px; padding: 4px 3px; }
+    .recite-tools { padding: 4px 6px; }
+    .recite-tools .icon-btn { width: 30px; height: 30px; min-width: 30px !important; min-height: 30px !important; }
+    .surah-select { padding: 4px 8px; min-height: 30px !important; }
+    .mushaf-page { padding: 6px 4px 4px; }
+    .ayat { font-size: calc(var(--mushaf-size) * 0.7); line-height: 1.95; }
+    .basmala { font-size: calc(var(--mushaf-size) * 0.62); }
+    .recite-panel { padding: 5px 6px calc(5px + env(safe-area-inset-bottom)); gap: 3px; }
+    .mode-seg button { min-height: 28px !important; padding: 3px 4px; }
+    .sel-chip button { min-height: 26px !important; }
+    .rating-select, .note-input { min-height: 30px !important; }
+    .recite-actions button { min-height: 30px !important; padding: 4px 4px; }
+}
